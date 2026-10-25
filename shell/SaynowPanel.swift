@@ -37,6 +37,8 @@ final class Panel: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
     }
 
     func applicationDidFinishLaunching(_: Notification) {
+        installEditMenu()
+
         let config = WKWebViewConfiguration()
         config.userContentController.add(self, name: "size")
         // The page plays the speech itself so the transcript can follow the
@@ -84,6 +86,28 @@ final class Panel: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             self?.present()
         }
+    }
+
+    /// ⌘V, ⌘C, ⌘X, ⌘A and ⌘Z are menu key equivalents: AppKit delivers them
+    /// to the web view only by finding them in the main menu. An accessory app
+    /// starts with no menu at all, so the page saw the keystroke and no paste
+    /// ever followed. This one is never drawn — .accessory has no menu bar —
+    /// and exists only so those shortcuts have somewhere to land.
+    private func installEditMenu() {
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        edit.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        edit.addItem(.separator())
+        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+
+        let item = NSMenuItem()
+        item.submenu = edit
+        let main = NSMenu()
+        main.addItem(item)
+        NSApp.mainMenu = main
     }
 
     private var shown = false
