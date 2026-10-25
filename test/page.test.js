@@ -22,7 +22,13 @@ assert.ok(SCRIPT, 'could not find the page script — did the markup change?');
  */
 function loadPage(state) {
   const { document, byId, search } = createDom({ markup: PAGE });
-  const calls = { fetched: [], audio: [], players: [], events: [] };
+  const calls = { fetched: [], audio: [], players: [], events: [], revoked: [] };
+
+  // Timers are held rather than run, so nothing fires unless a test says so.
+  // A cleared one is forgotten, which is what lets a test flush the clock
+  // without a countdown that was cancelled going off anyway.
+  const timers = new Map();
+  let timerId = 0;
 
   // Frames are queued rather than run inline. The highlight's tick reschedules
   // itself for as long as the clip is playing, so running one the moment it is
@@ -46,7 +52,8 @@ function loadPage(state) {
     location: { search },
     fetch: (url, init) => {
       calls.fetched.push({ url, init });
-      return Promise.resolve({ ok: true });
+      // A test can hold a request open by answering it here.
+      return calls.respond?.(url) ?? Promise.resolve({ ok: true });
     },
     Audio: class {
       constructor(src) {
@@ -89,8 +96,23 @@ function loadPage(state) {
       addEventListener() {}
     },
     requestAnimationFrame: (fn) => frames.push(fn),
-    setTimeout: () => 0,
-    clearTimeout: () => {},
+    setTimeout: (fn) => {
+      timerId += 1;
+      timers.set(timerId, fn);
+      return timerId;
+    },
+    clearTimeout: (id) => timers.delete(id),
+    URL: {
+      createObjectURL: (file) => `blob:${file.name}`,
+      revokeObjectURL: (url) => calls.revoked.push(url),
+    },
+    FileReader: class {
+      readAsDataURL(file) {
+        if (file.stalls) return; // a read that never finishes
+        this.result = `data:${file.type};base64,${Buffer.from(file.bytes ?? '').toString('base64')}`;
+        queueMicrotask(() => this.onload?.());
+      }
+    },
     ResizeObserver: class {
       observe() {}
     },
@@ -108,6 +130,14 @@ function loadPage(state) {
     for (const handler of windowListeners.get(type) ?? []) handler(event);
   };
 
+  /** Fire every timer still pending, as though their time had come. */
+  const tick = () => {
+    for (const [id, fn] of [...timers]) {
+      timers.delete(id);
+      fn();
+    }
+  };
+
   /** Run the frames asked for so far; a tick may queue the next one. */
   const frame = () => {
     for (const fn of frames.splice(0)) fn();
@@ -122,7 +152,15 @@ function loadPage(state) {
     return found;
   };
 
-  return { document, byId, calls, fireOnWindow, frame, words: () => wordsIn(byId.get('transcript')) };
+  return {
+    document,
+    byId,
+    calls,
+    fireOnWindow,
+    frame,
+    tick,
+    words: () => wordsIn(byId.get('transcript')),
+  };
 }
 
 const PLAIN = { text: 'The build finished, 42 tests passed.', ask: false, rate: 175, dismissMs: 5000 };
@@ -697,3 +735,145 @@ test('the transcript is never dragged shorter than a line or taller than the scr
  * protects nothing. "The page runs to completion" above already catches the
  * temporal dead zone definitively, because that is exactly how it fails.
  */
+
+/* ---- pasted images ------------------------------------------------------ */
+
+const ASKING = { ...PLAIN, ask: true, hasAudio: true, imageTypes: ['image/png', 'image/jpeg'] };
+
+/** A paste event as WebKit delivers it, with a way to see if it was taken. */
+function pasting(...files) {
+  const event = {
+    clipboardData: { files },
+    prevented: false,
+    preventDefault() {
+      event.prevented = true;
+    },
+  };
+  return event;
+}
+
+const screenshot = { name: 'image.png', type: 'image/png', bytes: 'not really a png' };
+
+/** Let the reader and the requests that follow it run. */
+const settled = () => new Promise((resolve) => setImmediate(resolve));
+
+test('a pasted image is attached, and its path is not pasted beside it', () => {
+  // A picture copied in Finder arrives as a file and as its path in text. Left
+  // alone, the path lands in the box next to the thumbnail.
+  const { byId } = loadPage(ASKING);
+  const event = pasting(screenshot);
+  byId.get('field').dispatch('paste', event);
+
+  const strip = byId.get('attachments');
+  assert.ok(!strip.classList.contains('hidden'), 'the thumbnail row should show');
+  assert.equal(strip.children.length, 1);
+  assert.equal(strip.children[0].children[0].src, 'blob:image.png');
+  assert.ok(event.prevented, 'the text half of the paste must be stopped');
+  assert.ok(byId.get('send').classList.contains('ready'), 'a picture alone can be sent');
+});
+
+test('a paste with no image in it is left to the browser', () => {
+  const { byId } = loadPage(ASKING);
+  const event = pasting();
+  byId.get('field').dispatch('paste', event);
+
+  assert.ok(!event.prevented, 'ordinary text has to paste as it always did');
+  assert.ok(byId.get('attachments').classList.contains('hidden'));
+});
+
+test('nothing is shown as attached that the CLI would not save', () => {
+  // The CLI says which types it keeps. A thumbnail for one it then dropped
+  // would tell the person their picture had been sent when it had not.
+  const { byId } = loadPage(ASKING);
+  const event = pasting({ name: 'logo.svg', type: 'image/svg+xml' });
+  byId.get('field').dispatch('paste', event);
+
+  assert.equal(byId.get('attachments').children.length, 0);
+  assert.ok(!event.prevented, 'and the paste goes ahead as text');
+});
+
+test('a waiting picture holds the bubble, and removing it gives the countdown back', () => {
+  // The bubble's one rule: whatever stops the countdown must be able to start
+  // it again. A picture is a draft like typed text, so it has to end the same
+  // way an emptied box does.
+  const { byId, calls } = loadPage(ASKING);
+  calls.players[0].handlers.ended();
+  const bar = byId.get('timer');
+  assert.equal(bar.style.transform, 'scaleX(0)', 'counting down before the paste');
+
+  byId.get('field').dispatch('paste', pasting(screenshot));
+  assert.equal(bar.style.opacity, '0', 'a picture waiting to be sent holds it open');
+
+  const thumb = byId.get('attachments').children[0];
+  thumb.children[1].dispatch('click');
+
+  assert.equal(byId.get('attachments').children.length, 0);
+  assert.ok(byId.get('attachments').classList.contains('hidden'));
+  assert.deepEqual(calls.revoked, ['blob:image.png'], 'the thumbnail is let go of');
+  assert.ok(!byId.get('send').classList.contains('ready'), 'nothing is left to send');
+  assert.equal(bar.style.opacity, '1', 'the countdown has to come back');
+  assert.equal(bar.style.transform, 'scaleX(0)');
+});
+
+test('a picture sent with no words is still a reply, and carries the picture', async () => {
+  const { byId, calls, tick } = loadPage(ASKING);
+  const field = byId.get('field');
+  field.dispatch('paste', pasting(screenshot));
+  field.dispatch('keydown', { key: 'Enter' });
+
+  await settled();
+  tick(); // the "Sent" beat
+  await settled();
+
+  const reply = calls.fetched.find((c) => c.url === '/reply');
+  assert.ok(reply, `expected a reply, saw ${JSON.stringify(calls.fetched.map((c) => c.url))}`);
+  assert.deepEqual(JSON.parse(reply.init.body), {
+    text: '',
+    images: [`data:image/png;base64,${Buffer.from(screenshot.bytes).toString('base64')}`],
+  });
+});
+
+test('/close waits for the reply to land, however long it takes to send', async () => {
+  // /close settles the bubble as dismissed. Sent on a fixed clock, it could
+  // overtake a reply still uploading a screenshot, and the answer was lost.
+  const { byId, calls, tick } = loadPage(ASKING);
+  let land;
+  const uploading = new Promise((resolve) => (land = resolve));
+  calls.respond = (url) => (url === '/reply' ? uploading : undefined);
+  const sent = () => calls.fetched.map((c) => c.url);
+
+  const field = byId.get('field');
+  field.dispatch('paste', pasting(screenshot));
+  field.dispatch('keydown', { key: 'Enter' });
+  await settled();
+  tick(); // the "Sent" beat
+  await settled();
+  assert.ok(sent().includes('/reply'), 'the reply should be on its way');
+
+  tick();
+  await settled();
+  assert.ok(!sent().includes('/close'), 'nothing may settle the bubble while the reply uploads');
+
+  land({ ok: true });
+  await settled();
+  tick();
+  assert.ok(sent().includes('/close'), 'once the reply is in, /close follows');
+});
+
+test('a picture that never finishes reading cannot leave the bubble on "Sent"', async () => {
+  // Sending stops the countdown for good, so whatever it waits on has to end.
+  const { byId, calls, tick } = loadPage(ASKING);
+  const field = byId.get('field');
+  field.value = 'words still matter';
+  field.dispatch('input');
+  field.dispatch('paste', pasting({ ...screenshot, stalls: true }));
+  field.dispatch('keydown', { key: 'Enter' });
+
+  await settled();
+  tick(); // the "Sent" beat, and the read being given up on
+  await settled();
+
+  const reply = calls.fetched.find((c) => c.url === '/reply');
+  assert.ok(reply, 'the reply has to go without the picture rather than not at all');
+  assert.deepEqual(JSON.parse(reply.init.body), { text: 'words still matter', images: [] });
+});

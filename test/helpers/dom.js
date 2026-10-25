@@ -153,6 +153,13 @@ class Element {
 
   scrollIntoView() {}
 
+  remove() {
+    const parent = this.parentElement;
+    if (!parent) return;
+    parent.children.splice(parent.children.indexOf(this), 1);
+    this.parentElement = null;
+  }
+
   get textContent() {
     return this.children.map((c) => c.textContent ?? '').join('');
   }
@@ -283,7 +290,7 @@ export function createDom({ search = '?t=testtoken', markup = '' } = {}) {
   const body = document.createElement('body');
   document.body = body;
 
-  for (const id of ['bubble', 'transcript', 'reply', 'field', 'send', 'play', 'close', 'grip', 'timer', 'sentNote', 'label']) {
+  for (const id of ['bubble', 'transcript', 'reply', 'attachments', 'field', 'send', 'play', 'close', 'grip', 'timer', 'sentNote', 'label']) {
     const el = document.createElement('div');
     el.ownerDocument = document;
     if (seeded.has(id)) el.className = seeded.get(id);

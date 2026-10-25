@@ -23,9 +23,22 @@ answer=$(saynow --from "<agent> · <task>" --ask "Should I drop the old table?")
 
 `--ask` blocks until they reply, then prints the reply to stdout.
 
+They can paste pictures into the reply — usually a screenshot of what they
+mean. Each is saved to a temporary file and its path printed on a line of its
+own after the words, so the first line is the text and every line after it is
+an image to open:
+
+```
+The second one, but tighter
+/var/folders/…/T/saynow-reply-Xa81bQ/image-1.png
+```
+
+A reply can be pictures alone, with no words — then every line is a path.
+Read those images before acting; they are often the whole answer.
+
 | Exit | Meaning |
 | --- | --- |
-| `0` | They replied. The answer is on stdout. |
+| `0` | They replied. The answer is on stdout, with any pasted image's path after it. |
 | `2` | They dismissed it or were away. **Treat as no answer, never as consent.** |
 | `1` | Something failed — usage, network, or no audio. |
 

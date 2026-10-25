@@ -21,6 +21,25 @@ const MIME = {
   '.svg': 'image/svg+xml',
 };
 
+/**
+ * Images a reply can carry, and the extension each is saved under.
+ *
+ * Raster formats only. The page is told this list and attaches nothing else,
+ * so a paste it shows as attached is never one dropped here. WebKit turns a
+ * TIFF on the clipboard into a PNG before the page sees it, which is why a
+ * screenshot copied with ⌃⇧⌘4 arrives as image/png.
+ */
+export const IMAGE_TYPES = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+  'image/heic': 'heic',
+  'image/heif': 'heif',
+  'image/tiff': 'tiff',
+  'image/bmp': 'bmp',
+};
+
 // A document can be wider than a sentence without becoming a window.
 const WIDTH = 420;
 const INITIAL_HEIGHT = 200;
@@ -34,8 +53,9 @@ const CACHE_DIR =
 /**
  * Show the bubble and wait for the user.
  *
- * Resolves with {reason: 'reply', text} when they answer, or
- * {reason: 'dismiss'} when it times out or they wave it away.
+ * Resolves with {reason: 'reply', text, images} when they answer, where
+ * images holds the path of each picture they pasted, or {reason: 'dismiss'}
+ * when it times out or they wave it away.
  */
 export async function showBubble({
   text,
@@ -106,6 +126,7 @@ export async function showBubble({
       : null,
     rate: rate || 175,
     dismissMs,
+    imageTypes: ask ? Object.keys(IMAGE_TYPES) : [],
     hasAudio: Boolean(audio),
     chunks: chunks?.map((c) => ({ firstWord: c.firstWord, wordCount: c.wordCount })) ?? null,
   };
@@ -213,7 +234,11 @@ export async function showBubble({
       res.writeHead(204).end();
       switch (route) {
         case '/reply':
-          settle({ reason: 'reply', text: String(body.text ?? '').trim() });
+          settle({
+            reason: 'reply',
+            text: String(body.text ?? '').trim(),
+            images: saveImages(body.images),
+          });
           break;
         case '/dismiss':
           settle({ reason: 'dismiss' });
@@ -267,6 +292,37 @@ function renderPage(state) {
     '\\u003c',
   )};</script>`;
   return html.replace('<!--SAYNOW_STATE-->', injected);
+}
+
+/**
+ * Write the images a reply carried to disk, and return their paths.
+ *
+ * The caller only ever reads text from us, so a picture has to become a file
+ * it can open. Each reply gets a fresh directory only this user can read,
+ * left in the system temp folder for the OS to clear away: an agent opens the
+ * file seconds after we exit, and nothing here needs it for longer.
+ *
+ * Never throws. An image that cannot be saved is reported and skipped, since
+ * the words of the reply are still worth delivering on their own.
+ */
+export function saveImages(images) {
+  if (!Array.isArray(images) || !images.length) return [];
+  const saved = [];
+  let dir = null;
+  for (const image of images) {
+    const [, type, data] = /^data:([\w./+-]+);base64,(.*)$/s.exec(String(image ?? '')) ?? [];
+    const ext = IMAGE_TYPES[type?.toLowerCase()];
+    if (!ext) continue;
+    try {
+      dir ??= fs.mkdtempSync(path.join(os.tmpdir(), 'saynow-reply-'));
+      const file = path.join(dir, `image-${saved.length + 1}.${ext}`);
+      fs.writeFileSync(file, Buffer.from(data, 'base64'), { mode: 0o600 });
+      saved.push(file);
+    } catch (err) {
+      process.stderr.write(`saynow: could not save a pasted image: ${err.message}\n`);
+    }
+  }
+  return saved;
 }
 
 function readJson(req) {

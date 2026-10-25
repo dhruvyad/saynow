@@ -295,8 +295,7 @@ async function speakCommand(text, flags) {
         speech: Promise.resolve(),
       });
       if (!flags.ask) return;
-      if (answer.reason === 'reply' && answer.text) return void console.log(answer.text);
-      process.exitCode = 2;
+      if (!printAnswer(answer)) process.exitCode = 2;
       return;
     } finally {
       release();
@@ -342,12 +341,20 @@ async function speakCommand(text, flags) {
   stop.abort();
 
   if (!flags.ask) return;
+  if (!printAnswer(answer)) process.exitCode = 2;
+}
 
-  if (answer.reason === 'reply' && answer.text) {
-    console.log(answer.text);
-    return;
-  }
-  process.exitCode = 2;
+/**
+ * Print a reply: the words on the first line, then one line per pasted image
+ * giving the path it was saved to. An image sent with no words is still an
+ * answer. Returns whether there was anything to print.
+ */
+function printAnswer(answer) {
+  if (answer.reason !== 'reply') return false;
+  const lines = [answer.text, ...(answer.images ?? [])].filter(Boolean);
+  if (!lines.length) return false;
+  console.log(lines.join('\n'));
+  return true;
 }
 
 async function modelsCommand() {

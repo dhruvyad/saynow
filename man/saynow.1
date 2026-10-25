@@ -188,6 +188,11 @@ It waits indefinitely once you reach for it \(em the pointer on the bubble or a
 hand in the reply box \(em and nothing takes it away on a clock. If you do not
 reach for it, it fades out five seconds after the audio ends and exits 2, which
 lets a caller tell "they said no" apart from "nobody was there".
+.PP
+Pictures can be pasted into the reply box with \[u2318]V \(em a screenshot,
+or an image copied in Finder or a browser. Each is saved to a private temporary
+folder, and its path is printed on a line of its own after the words. A reply
+can be pictures alone, in which case only their paths are printed.
 .SH CONFIGURATION
 Settings live in \fI~/.config/saynow/config.json\fR, created with mode 0600.
 Precedence, from lowest to highest, is built\-in defaults, the config file,
@@ -226,7 +231,8 @@ Provider credentials. These take precedence over the config file.
 .SH EXIT STATUS
 .TP
 .B 0
-Spoke successfully, or wrote the file when \fB\-\-save\fR was given.
+Spoke successfully, wrote the file when \fB\-\-save\fR was given, or got a
+reply.
 .TP
 .B 1
 Usage error, unusable provider under \fB\-\-strict\fR, network or API failure,

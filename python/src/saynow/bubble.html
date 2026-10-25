@@ -420,12 +420,67 @@
 
       .reply {
         display: flex;
+        flex-wrap: wrap;
         align-items: center;
         gap: 7px;
         margin-top: 13px;
       }
 
       .reply.hidden { display: none; }
+
+      /* Pasted images sit on their own row above the box, inside the reply so
+         that sending or hiding it takes them along. */
+      .attachments {
+        display: flex;
+        gap: 6px;
+        flex-basis: 100%;
+        overflow-x: auto;
+        scrollbar-width: none;
+      }
+
+      .attachments.hidden { display: none; }
+      .attachments::-webkit-scrollbar { display: none; }
+
+      .thumb {
+        position: relative;
+        flex-shrink: 0;
+        height: 52px;
+        border-radius: 8px;
+        overflow: hidden;
+        background: var(--field);
+        box-shadow: inset 0 0 0 1px var(--edge);
+      }
+
+      .thumb img {
+        display: block;
+        height: 100%;
+        min-width: 40px;
+        max-width: 96px;
+        object-fit: cover;
+      }
+
+      .unattach {
+        position: absolute;
+        top: 4px;
+        right: 4px;
+        display: grid;
+        place-items: center;
+        width: 18px;
+        height: 18px;
+        border: none;
+        border-radius: 50%;
+        background: rgba(10, 10, 10, 0.78);
+        color: var(--text);
+        cursor: pointer;
+        opacity: 0;
+        transition: opacity 0.14s ease;
+      }
+
+      .thumb:hover .unattach,
+      .unattach:focus-visible { opacity: 1; }
+
+      .unattach svg { width: 8px; height: 8px; stroke: currentColor; fill: none;
+                      stroke-width: 1.8; stroke-linecap: round; }
 
       .field {
         flex: 1;
@@ -582,6 +637,7 @@
       <div class="transcript" id="transcript"></div>
 
       <div class="reply hidden" id="reply">
+        <div class="attachments hidden" id="attachments"></div>
         <input
           class="field"
           id="field"
@@ -626,6 +682,7 @@
         bubble: document.getElementById('bubble'),
         transcript: document.getElementById('transcript'),
         reply: document.getElementById('reply'),
+        attachments: document.getElementById('attachments'),
         field: document.getElementById('field'),
         send: document.getElementById('send'),
         play: document.getElementById('play'),
@@ -1074,7 +1131,16 @@
        */
       let resizing = null;
 
-      const drafting = () => el.field.value.trim().length > 0;
+      /**
+       * Images pasted into the reply, oldest first, each {file, url, thumb}.
+       *
+       * Part of the draft exactly as typed text is, and read the same way: a
+       * picture waiting to be sent holds the bubble, and removing the last one
+       * from an empty box gives the countdown back.
+       */
+      const attachments = [];
+
+      const drafting = () => el.field.value.trim().length > 0 || attachments.length > 0;
       const holding = () => hovering || drafting() || Boolean(resizing);
 
       function startDismissTimer(ms = state.dismissMs ?? 5000) {
@@ -1143,20 +1209,98 @@
       function close(reason, payload) {
         player?.pause();
         el.bubble.classList.add('leaving');
-        post('/' + reason, payload);
-        setTimeout(() => post('/close'), 260);
+        // /close only once the reason has landed. A reply carrying a pasted
+        // screenshot is megabytes, and could still be on the wire when a
+        // /close sent on a fixed clock settled the bubble as dismissed.
+        post('/' + reason, payload).then(() => setTimeout(() => post('/close'), 260));
       }
+
+      // Given up on after ten seconds rather than waited on for good. A read
+      // that never finished would leave "Sent" on screen with the countdown
+      // stopped and nothing able to start it again, and the caller waiting on
+      // an answer that had already been given.
+      const readAsDataUrl = (file) =>
+        new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = () => resolve(null);
+          setTimeout(() => resolve(null), 10000);
+          reader.readAsDataURL(file);
+        });
 
       function submit() {
         const text = el.field.value.trim();
-        if (!text) return;
+        if (!text && !attachments.length) return;
         // Answered: the only thing left to do is close, 420ms from now.
         engage();
         el.reply.classList.add('hidden');
         el.sent.classList.remove('hidden');
         showSender(state.from);
-        setTimeout(() => close('reply', { text }), 420);
+        // Encoded only now, so a picture removed before sending never is. A
+        // file that cannot be read is left out rather than allowed to stop the
+        // rest of the reply from going.
+        const images = Promise.all(attachments.map(({ file }) => readAsDataUrl(file)));
+        const shown = new Promise((resolve) => setTimeout(resolve, 420));
+        Promise.all([images, shown]).then(([read]) =>
+          close('reply', { text, images: read.filter(Boolean) }),
+        );
       }
+
+      /* ---- pasted images --------------------------------------------------- */
+
+      // Which types the CLI will save, handed over by it so that nothing is
+      // shown as attached that it would then quietly drop.
+      const imageTypes = new Set(state.imageTypes ?? []);
+
+      function attach(file) {
+        // An object URL rather than a data URL: a full-screen capture is not
+        // worth base64-encoding just to draw it 52 pixels tall.
+        const entry = { file, url: URL.createObjectURL(file) };
+
+        const thumb = document.createElement('div');
+        thumb.className = 'thumb';
+        const img = document.createElement('img');
+        img.src = entry.url;
+        img.alt = file.name || 'Pasted image';
+        const remove = document.createElement('button');
+        remove.className = 'unattach';
+        remove.title = 'Remove';
+        remove.setAttribute('aria-label', 'Remove image');
+        remove.innerHTML = '<svg viewBox="0 0 12 12"><path d="M3 3l6 6M9 3l-6 6" /></svg>';
+        remove.addEventListener('click', () => detach(entry));
+        thumb.append(img, remove);
+
+        entry.thumb = thumb;
+        attachments.push(entry);
+        el.attachments.append(thumb);
+        el.attachments.classList.remove('hidden');
+      }
+
+      function detach(entry) {
+        const at = attachments.indexOf(entry);
+        if (at < 0) return;
+        attachments.splice(at, 1);
+        entry.thumb.remove();
+        URL.revokeObjectURL(entry.url);
+        el.attachments.classList.toggle('hidden', attachments.length === 0);
+        el.send.classList.toggle('ready', drafting());
+        focusField();
+        reconsider();
+      }
+
+      // Only images are taken over. Anything else pastes as it always has —
+      // which for a document copied in Finder is its path, and that is what
+      // an agent can use.
+      el.field.addEventListener('paste', (e) => {
+        const images = [...(e.clipboardData?.files ?? [])].filter((f) => imageTypes.has(f.type));
+        if (!images.length) return;
+        // A picture copied in Finder carries its path as text as well, which
+        // would otherwise land in the box beside the thumbnail.
+        e.preventDefault?.();
+        for (const file of images) attach(file);
+        el.send.classList.toggle('ready', drafting());
+        reconsider();
+      });
 
       /* ---- wiring --------------------------------------------------------- */
 

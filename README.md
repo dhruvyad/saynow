@@ -45,6 +45,15 @@ Speaks, shows a reply box, and blocks. The reply goes to stdout. Exit `0` means
 they answered, exit `2` means nobody was there — so an agent can tell "they said
 no" from "they were away from the desk".
 
+A screenshot pasted into the reply box with ⌘V comes back too. Each picture is
+saved to a private temporary folder and its path printed on its own line after
+the words, so an agent can open it:
+
+```
+The second one, but tighter
+/var/folders/…/T/saynow-reply-Xa81bQ/image-1.png
+```
+
 ## Usage
 
 ```bash
@@ -140,7 +149,8 @@ Otherwise add this to your `CLAUDE.md`, `AGENTS.md`, or equivalent:
 
 ```markdown
 Speak to the user with `saynow --from "<who> · <task>" --ask "<text>"`. It
-shows a reply box and prints their answer to stdout; exit 2 means they were
+shows a reply box and prints their answer to stdout, followed by the path of
+any image they pasted, one per line — open those. Exit 2 means they were
 away, which is never consent. Default to `--ask` — almost anything worth
 saying invites a reply. Use `--file report.md` when the answer is a table or a
 chart. Keep it to one short sentence: it is heard, not read, and `--from`

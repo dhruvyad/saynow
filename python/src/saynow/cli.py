@@ -243,11 +243,23 @@ def speak(text: str, args: argparse.Namespace, document=None) -> int:
 
     if not args.ask:
         return 0
-    if answer.get("reason") == "reply" and answer.get("text"):
-        print(answer["text"])
+    if print_answer(answer):
         return 0
     # Dismissed or away. Never read as consent.
     return 2
+
+
+def print_answer(answer: Dict[str, Any]) -> bool:
+    """Print a reply: the words on the first line, then one line per pasted
+    image giving the path it was saved to. An image sent with no words is
+    still an answer. Returns whether there was anything to print."""
+    if answer.get("reason") != "reply":
+        return False
+    lines = [line for line in [answer.get("text"), *(answer.get("images") or [])] if line]
+    if not lines:
+        return False
+    print("\n".join(lines))
+    return True
 
 
 def init_command() -> int:

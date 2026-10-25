@@ -7,6 +7,8 @@ drift into looking or behaving differently.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
 import mimetypes
@@ -17,11 +19,12 @@ import shutil
 import socketserver
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, quote, urlparse
 
 from .markdown import render as render_markdown
@@ -37,6 +40,57 @@ BROWSERS = {
     ],
     "linux": ["google-chrome", "chromium", "chromium-browser", "microsoft-edge"],
 }
+
+
+# Images a reply can carry, and the extension each is saved under. Raster
+# formats only, and handed to the page so that it attaches nothing this would
+# then drop. WebKit turns a TIFF on the clipboard into a PNG before the page
+# sees it, which is why a screenshot copied with ctrl-shift-cmd-4 arrives as
+# image/png.
+IMAGE_TYPES = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/gif": "gif",
+    "image/webp": "webp",
+    "image/heic": "heic",
+    "image/heif": "heif",
+    "image/tiff": "tiff",
+    "image/bmp": "bmp",
+}
+
+_DATA_URL = re.compile(r"^data:([\w./+-]+);base64,(.*)$", re.S)
+
+
+def save_images(images: Any) -> List[str]:
+    """Write the images a reply carried to disk, and return their paths.
+
+    The caller only ever reads text from us, so a picture has to become a file
+    it can open. Each reply gets a fresh directory only this user can read,
+    left in the system temp folder for the OS to clear away.
+
+    Never raises. An image that cannot be saved is reported and skipped, since
+    the words of the reply are still worth delivering on their own.
+    """
+    if not isinstance(images, list):
+        return []
+    saved: List[str] = []
+    directory: Optional[str] = None
+    for image in images:
+        match = _DATA_URL.match(str(image or ""))
+        ext = IMAGE_TYPES.get(match.group(1).lower()) if match else None
+        if not ext:
+            continue
+        try:
+            data = base64.b64decode(match.group(2))
+            directory = directory or tempfile.mkdtemp(prefix="saynow-reply-")
+            path = os.path.join(directory, f"image-{len(saved) + 1}.{ext}")
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(data)
+            saved.append(path)
+        except (OSError, binascii.Error, ValueError) as err:
+            sys.stderr.write(f"saynow: could not save a pasted image: {err}\n")
+    return saved
 
 
 def cache_dir() -> Path:
@@ -99,7 +153,11 @@ def show_bubble(
     # bound a headless server that no one is ever going to answer.
     timeout: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """Show the bubble and wait. Returns {"reason": "reply"|"dismiss", "text": ...}."""
+    """Show the bubble and wait.
+
+    Returns {"reason": "reply"|"dismiss", "text": ..., "images": [...]}, where
+    images holds the path of each picture pasted into the reply.
+    """
 
     # A secret for this bubble alone. POST /reply is what the caller reads back
     # as the user's answer, so anything able to reach the port could otherwise
@@ -123,6 +181,7 @@ def show_bubble(
         # The same for a question as for a statement. Being present is what
         # holds a bubble open, not what it happens to be asking.
         "dismissMs": dismiss_ms or 5000,
+        "imageTypes": list(IMAGE_TYPES) if ask else [],
         "hasAudio": bool(audio),
         # Rendered here rather than in the page: the renderer escapes its input
         # and emits only tags it built, so the page never parses agent text.
@@ -136,7 +195,14 @@ def show_bubble(
 
     def settle(reason: str, body: Optional[Dict[str, Any]] = None) -> None:
         if not done.is_set():
-            settled.update({"reason": reason, "text": (body or {}).get("text", "")})
+            body = body if isinstance(body, dict) else {}
+            settled.update(
+                {
+                    "reason": reason,
+                    "text": str(body.get("text") or "").strip(),
+                    "images": save_images(body.get("images")),
+                }
+            )
             done.set()
 
     class Handler(BaseHTTPRequestHandler):
@@ -249,7 +315,7 @@ def show_bubble(
 
     try:
         done.wait(timeout=timeout)
-        return settled or {"reason": "dismiss", "text": ""}
+        return settled or {"reason": "dismiss", "text": "", "images": []}
     finally:
         if window:
             window.terminate()

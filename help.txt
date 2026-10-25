@@ -202,6 +202,15 @@ ASKING
   audio ends and exits 2, which lets a caller tell "they said no" apart from
   "nobody was there".
 
+  Pictures can be pasted into the reply box with ⌘V — a screenshot, or an
+  image copied in Finder or a browser. Each is saved to a private temporary
+  folder, and its path is printed on a line of its own after the words:
+
+    The second one, but tighter
+    /var/folders/…/T/saynow-reply-Xa81bQ/image-1.png
+
+  A reply can be pictures alone, in which case only their paths are printed.
+
 EXIT CODES
   0   spoke successfully, wrote the file when --save was given, or got a reply
   1   usage error, unusable provider under --strict, network or API failure,
