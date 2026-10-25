@@ -1,6 +1,6 @@
 {
   "name": "saynow",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "Speak text aloud from the terminal. Built for LLM agents to talk to you, with offline system TTS when no API key is configured.",
   "type": "module",
   "bin": {

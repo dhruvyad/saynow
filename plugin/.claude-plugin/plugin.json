@@ -1,7 +1,7 @@
 {
   "name": "saynow",
   "description": "Speak to the user out loud and wait for their reply. Requires the saynow CLI: npm install -g saynow",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "author": {
     "name": "Dhruv Yadav"
   },
